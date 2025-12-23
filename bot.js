@@ -2,6 +2,7 @@ const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
+const XLSX = require('xlsx');
 require('dotenv').config();
 
 // Import services
@@ -46,16 +47,23 @@ Kirim foto invoice Anda, dan saya akan extract data secara otomatis.
 • Extract nama vendor
 • Extract total amount
 • Extract detail item
+• Export ke Excel
 
 📋 *Command:*
 /start - Tampilkan pesan ini
 /history - Lihat 10 invoice terakhir
 /stats - Statistik invoice
+/export\\_all - Export semua invoice ke Excel
+/export\\_month - Export invoice bulan ini
+/export\\_[id] - Export invoice tertentu
 
 🎯 *Format yang didukung:*
 JPG, PNG, WebP
 
 Silakan kirim foto invoice Anda sekarang! 📷
+
+━━━━━━━━━━━━━━━━━━━━━
+© 2024 Almafazi, Codenesia
   `;
 
     bot.sendMessage(chatId, welcomeMessage, { parse_mode: 'Markdown' });
@@ -148,6 +156,246 @@ bot.onText(/\/stats/, async (msg) => {
     } catch (error) {
         console.error('Error fetching stats:', error);
         bot.sendMessage(chatId, '❌ Gagal mengambil statistik.');
+    }
+});
+
+// Command: /export_all - Export all invoices to Excel
+bot.onText(/\/export_all/, async (msg) => {
+    const chatId = msg.chat.id;
+
+    try {
+        const statusMsg = await bot.sendMessage(chatId, '📊 Generating Excel file...');
+
+        const invoices = await getAllInvoices();
+
+        if (invoices.length === 0) {
+            await bot.editMessageText('📭 Belum ada invoice untuk di-export.', {
+                chat_id: chatId,
+                message_id: statusMsg.message_id
+            });
+            return;
+        }
+
+        // Prepare data for Excel
+        const excelData = [];
+        invoices.forEach(inv => {
+            // Add main invoice row
+            excelData.push({
+                'ID': inv.id,
+                'Invoice Number': inv.invoice_number || 'N/A',
+                'Date': inv.invoice_date || 'N/A',
+                'Vendor': inv.vendor_name || 'N/A',
+                'Total Amount': inv.total_amount || 0,
+                'Currency': inv.currency || '',
+                'Items Count': inv.items ? inv.items.length : 0,
+                'Created At': inv.created_at
+            });
+        });
+
+        // Create workbook
+        const wb = XLSX.utils.book_new();
+        const ws = XLSX.utils.json_to_sheet(excelData);
+
+        // Auto-size columns
+        const colWidths = [
+            { wch: 5 },  // ID
+            { wch: 20 }, // Invoice Number
+            { wch: 12 }, // Date
+            { wch: 25 }, // Vendor
+            { wch: 15 }, // Total Amount
+            { wch: 8 },  // Currency
+            { wch: 12 }, // Items Count
+            { wch: 20 }  // Created At
+        ];
+        ws['!cols'] = colWidths;
+
+        XLSX.utils.book_append_sheet(wb, ws, 'Invoices');
+
+        // Generate filename
+        const filename = `Invoice_Export_${new Date().toISOString().split('T')[0]}.xlsx`;
+        const filepath = path.join(__dirname, 'temp', filename);
+
+        // Write file
+        XLSX.writeFile(wb, filepath);
+
+        // Send file
+        await bot.sendDocument(chatId, filepath, {
+            caption: `✅ Export berhasil!\n📝 Total: ${invoices.length} invoices\n💰 Total Amount: IDR ${invoices.reduce((sum, inv) => sum + (inv.total_amount || 0), 0).toLocaleString('id-ID')}`
+        });
+
+        // Delete status message
+        await bot.deleteMessage(chatId, statusMsg.message_id);
+
+        // Clean up file
+        fs.unlinkSync(filepath);
+
+    } catch (error) {
+        console.error('Error exporting to Excel:', error);
+        bot.sendMessage(chatId, '❌ Gagal membuat file Excel.');
+    }
+});
+
+// Command: /export_[id] - Export specific invoice to Excel
+bot.onText(/\/export_(\d+)/, async (msg, match) => {
+    const chatId = msg.chat.id;
+    const invoiceId = parseInt(match[1]);
+
+    try {
+        const statusMsg = await bot.sendMessage(chatId, '📊 Generating Excel file...');
+
+        const invoice = await getInvoiceById(invoiceId);
+
+        if (!invoice) {
+            await bot.editMessageText('❌ Invoice tidak ditemukan.', {
+                chat_id: chatId,
+                message_id: statusMsg.message_id
+            });
+            return;
+        }
+
+        // Create workbook with two sheets
+        const wb = XLSX.utils.book_new();
+
+        // Sheet 1: Invoice Summary
+        const summaryData = [{
+            'Field': 'ID',
+            'Value': invoice.id
+        }, {
+            'Field': 'Invoice Number',
+            'Value': invoice.invoice_number || 'N/A'
+        }, {
+            'Field': 'Date',
+            'Value': invoice.invoice_date || 'N/A'
+        }, {
+            'Field': 'Vendor',
+            'Value': invoice.vendor_name || 'N/A'
+        }, {
+            'Field': 'Total Amount',
+            'Value': invoice.total_amount || 0
+        }, {
+            'Field': 'Currency',
+            'Value': invoice.currency || ''
+        }];
+
+        const wsSummary = XLSX.utils.json_to_sheet(summaryData);
+        wsSummary['!cols'] = [{ wch: 20 }, { wch: 30 }];
+        XLSX.utils.book_append_sheet(wb, wsSummary, 'Summary');
+
+        // Sheet 2: Line Items
+        if (invoice.items && invoice.items.length > 0) {
+            const itemsData = invoice.items.map((item, i) => ({
+                'No': i + 1,
+                'Description': item.description || '',
+                'Quantity': item.quantity || 0,
+                'Unit Price': item.unit_price || 0,
+                'Amount': item.amount || 0
+            }));
+
+            const wsItems = XLSX.utils.json_to_sheet(itemsData);
+            wsItems['!cols'] = [
+                { wch: 5 },
+                { wch: 30 },
+                { wch: 10 },
+                { wch: 15 },
+                { wch: 15 }
+            ];
+            XLSX.utils.book_append_sheet(wb, wsItems, 'Items');
+        }
+
+        // Generate filename
+        const filename = `Invoice_${invoice.invoice_number || invoice.id}_${new Date().toISOString().split('T')[0]}.xlsx`;
+        const filepath = path.join(__dirname, 'temp', filename);
+
+        // Write file
+        XLSX.writeFile(wb, filepath);
+
+        // Send file
+        await bot.sendDocument(chatId, filepath, {
+            caption: `✅ Export invoice #${invoice.id}\n📄 ${invoice.invoice_number || 'N/A'}\n💰 ${invoice.currency || ''} ${(invoice.total_amount || 0).toLocaleString('id-ID')}`
+        });
+
+        // Delete status message
+        await bot.deleteMessage(chatId, statusMsg.message_id);
+
+        // Clean up file
+        fs.unlinkSync(filepath);
+
+    } catch (error) {
+        console.error('Error exporting invoice:', error);
+        bot.sendMessage(chatId, '❌ Gagal membuat file Excel.');
+    }
+});
+
+// Command: /export_month - Export current month invoices
+bot.onText(/\/export_month/, async (msg) => {
+    const chatId = msg.chat.id;
+
+    try {
+        const statusMsg = await bot.sendMessage(chatId, '📊 Generating Excel file...');
+
+        const allInvoices = await getAllInvoices();
+
+        // Filter invoices from current month
+        const now = new Date();
+        const currentMonth = now.getMonth();
+        const currentYear = now.getFullYear();
+
+        const monthInvoices = allInvoices.filter(inv => {
+            if (!inv.invoice_date) return false;
+            const invDate = new Date(inv.invoice_date);
+            return invDate.getMonth() === currentMonth && invDate.getFullYear() === currentYear;
+        });
+
+        if (monthInvoices.length === 0) {
+            await bot.editMessageText('📭 Tidak ada invoice bulan ini.', {
+                chat_id: chatId,
+                message_id: statusMsg.message_id
+            });
+            return;
+        }
+
+        // Prepare data for Excel
+        const excelData = monthInvoices.map(inv => ({
+            'ID': inv.id,
+            'Invoice Number': inv.invoice_number || 'N/A',
+            'Date': inv.invoice_date || 'N/A',
+            'Vendor': inv.vendor_name || 'N/A',
+            'Total Amount': inv.total_amount || 0,
+            'Currency': inv.currency || '',
+            'Items Count': inv.items ? inv.items.length : 0
+        }));
+
+        // Create workbook
+        const wb = XLSX.utils.book_new();
+        const ws = XLSX.utils.json_to_sheet(excelData);
+        ws['!cols'] = [
+            { wch: 5 }, { wch: 20 }, { wch: 12 }, { wch: 25 },
+            { wch: 15 }, { wch: 8 }, { wch: 12 }
+        ];
+        XLSX.utils.book_append_sheet(wb, ws, 'Invoices');
+
+        // Generate filename
+        const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        const filename = `Invoice_${monthNames[currentMonth]}_${currentYear}.xlsx`;
+        const filepath = path.join(__dirname, 'temp', filename);
+
+        // Write file
+        XLSX.writeFile(wb, filepath);
+
+        // Send file
+        await bot.sendDocument(chatId, filepath, {
+            caption: `✅ Export ${monthNames[currentMonth]} ${currentYear}\n📝 Total: ${monthInvoices.length} invoices\n💰 Total Amount: IDR ${monthInvoices.reduce((sum, inv) => sum + (inv.total_amount || 0), 0).toLocaleString('id-ID')}`
+        });
+
+        // Delete status message
+        await bot.deleteMessage(chatId, statusMsg.message_id);
+
+        // Clean up file
+        fs.unlinkSync(filepath);
+
+    } catch (error) {
+        console.error('Error exporting month:', error);
+        bot.sendMessage(chatId, '❌ Gagal membuat file Excel.');
     }
 });
 
