@@ -6,8 +6,9 @@ const XLSX = require('xlsx');
 require('dotenv').config();
 
 // Import services
-const { extractInvoiceData } = require('./services/replicateService');
+const { extractInvoiceData, extractInvoiceDataFromText } = require('./services/replicateService');
 const { saveInvoice, getAllInvoices, getInvoiceById } = require('./services/databaseService');
+const { transcribeAudio } = require('./services/whisperService');
 
 // Initialize database
 require('./config/database');
@@ -39,7 +40,8 @@ bot.onText(/\/start/, (msg) => {
 👋 *Selamat datang di Invoice OCR Bot!*
 
 📸 *Cara Menggunakan:*
-Kirim foto invoice Anda, dan saya akan extract data secara otomatis.
+• Kirim foto invoice, atau
+• 🎤 Kirim voice message dengan data invoice
 
 ✨ *Fitur:*
 • Extract nomor invoice
@@ -58,9 +60,11 @@ Kirim foto invoice Anda, dan saya akan extract data secara otomatis.
 /export\\_[id] - Export invoice tertentu
 
 🎯 *Format yang didukung:*
-JPG, PNG, WebP
+📷 Foto: JPG, PNG, WebP
+🎤 Voice: Bahasa Indonesia / English
 
-Silakan kirim foto invoice Anda sekarang! 📷
+*Contoh voice:*
+_"Invoice dari Toko ABC, nomor 123, tanggal 20 Desember 2024, total 50 ribu rupiah, item sabun 10 ribu, shampo 40 ribu"_
 
 ━━━━━━━━━━━━━━━━━━━━━
 © 2024 Almafazi, Codenesia
@@ -397,6 +401,155 @@ bot.onText(/\/export_month/, async (msg) => {
     } catch (error) {
         console.error('Error exporting month:', error);
         bot.sendMessage(chatId, '❌ Gagal membuat file Excel.');
+    }
+});
+
+// Handle voice messages
+bot.on('voice', async (msg) => {
+    const chatId = msg.chat.id;
+
+    try {
+        // Send processing message
+        const processingMsg = await bot.sendMessage(chatId, '🎤 Transcribing audio...');
+
+        // Get voice file info
+        const voice = msg.voice;
+        const fileId = voice.file_id;
+        const duration = voice.duration;
+
+        // Check duration (reject if too short)
+        if (duration < 1) {
+            await bot.editMessageText(
+                '❌ Audio terlalu pendek. Minimal 1 detik.',
+                { chat_id: chatId, message_id: processingMsg.message_id }
+            );
+            return;
+        }
+
+        // Download voice from Telegram
+        const file = await bot.getFile(fileId);
+        const filePath = file.file_path;
+        const fileUrl = `https://api.telegram.org/file/bot${BOT_TOKEN}/${filePath}`;
+
+        // Generate unique filename
+        const ext = path.extname(filePath) || '.ogg';
+        const filename = `voice-${Date.now()}-${Math.round(Math.random() * 1E9)}${ext}`;
+        const tempFilePath = path.join(__dirname, 'temp', filename);
+
+        // Download file
+        const response = await axios.get(fileUrl, { responseType: 'stream' });
+        const writer = fs.createWriteStream(tempFilePath);
+        response.data.pipe(writer);
+
+        await new Promise((resolve, reject) => {
+            writer.on('finish', resolve);
+            writer.on('error', reject);
+        });
+
+        // Move to uploads directory for public access
+        const uploadPath = path.join(__dirname, 'uploads', filename);
+        fs.renameSync(tempFilePath, uploadPath);
+
+        // Construct public URL
+        const baseUrl = process.env.BASE_URL || 'http://localhost:3000';
+        const audioUrl = `${baseUrl}/uploads/${filename}`;
+
+        // Update status
+        await bot.editMessageText(
+            '🎤 Transcribing audio...\n⏳ Processing...',
+            { chat_id: chatId, message_id: processingMsg.message_id }
+        );
+
+        // Transcribe audio using Whisper
+        const transcriptionResult = await transcribeAudio(audioUrl);
+
+        if (!transcriptionResult.success) {
+            // Clean up file
+            if (fs.existsSync(uploadPath)) {
+                fs.unlinkSync(uploadPath);
+            }
+
+            await bot.editMessageText(
+                '❌ Gagal transcribe audio. Pastikan audio jelas dan tidak ada noise berlebihan.',
+                { chat_id: chatId, message_id: processingMsg.message_id }
+            );
+            return;
+        }
+
+        const transcription = transcriptionResult.transcription;
+        console.log('Transcription:', transcription);
+
+        // Update status
+        await bot.editMessageText(
+            `🎤 Transcription: "${transcription.substring(0, 100)}..."\n⏳ Extracting invoice data...`,
+            { chat_id: chatId, message_id: processingMsg.message_id }
+        );
+
+        // Extract invoice data from transcription
+        const extractionResult = await extractInvoiceDataFromText(transcription);
+
+        // Clean up audio file
+        if (fs.existsSync(uploadPath)) {
+            fs.unlinkSync(uploadPath);
+        }
+
+        if (!extractionResult.success) {
+            await bot.editMessageText(
+                `❌ Gagal extract data invoice dari voice.\n\n📝 Transcription:\n"${transcription}"\n\nCoba lagi dengan menyebutkan data lebih jelas.`,
+                { chat_id: chatId, message_id: processingMsg.message_id }
+            );
+            return;
+        }
+
+        // Save to database
+        const dbResult = await saveInvoice(
+            extractionResult.data,
+            `voice_${chatId}_${filename}`,
+            `Transcription: ${transcription}\n\nRaw: ${extractionResult.rawResponse}`
+        );
+
+        // Format result message
+        const data = extractionResult.data;
+        let resultMessage = '✅ *Invoice dari voice berhasil diproses!*\n\n';
+        resultMessage += `🎤 *Transcription:* "${transcription.substring(0, 150)}${transcription.length > 150 ? '...' : ''}"\n\n`;
+        resultMessage += `🆔 *ID:* ${dbResult.id}\n`;
+        resultMessage += `📄 *No\\. Invoice:* ${escapeMarkdown(data.invoice_number) || 'N/A'}\n`;
+        resultMessage += `📅 *Tanggal:* ${escapeMarkdown(data.invoice_date) || 'N/A'}\n`;
+        resultMessage += `🏪 *Vendor:* ${escapeMarkdown(data.vendor_name) || 'N/A'}\n`;
+        resultMessage += `💰 *Total:* ${escapeMarkdown(data.currency) || ''} ${data.total_amount?.toLocaleString('id-ID') || 0}\n\n`;
+
+        if (data.items && data.items.length > 0) {
+            resultMessage += '*📦 Item:*\n';
+            data.items.forEach((item, i) => {
+                resultMessage += `${i + 1}\\. ${escapeMarkdown(item.description)}\n`;
+                resultMessage += `   ${item.quantity}x @ ${item.unit_price?.toLocaleString('id-ID')} = ${item.amount?.toLocaleString('id-ID')}\n`;
+            });
+            resultMessage += '\n';
+        }
+
+        resultMessage += `💾 Data tersimpan dengan ID: \`${dbResult.id}\`\n`;
+        resultMessage += `Gunakan /detail\\_${dbResult.id} untuk melihat detail lengkap\\.`;
+
+        // Update processing message with result and inline keyboard
+        await bot.editMessageText(resultMessage, {
+            chat_id: chatId,
+            message_id: processingMsg.message_id,
+            parse_mode: 'Markdown',
+            reply_markup: {
+                inline_keyboard: [
+                    [
+                        {
+                            text: '📊 Export to Excel',
+                            callback_data: `export_${dbResult.id}`
+                        }
+                    ]
+                ]
+            }
+        });
+
+    } catch (error) {
+        console.error('Error processing voice:', error);
+        bot.sendMessage(chatId, `❌ Terjadi error: ${error.message}`);
     }
 });
 
