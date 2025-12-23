@@ -302,8 +302,9 @@ bot.onText(/\/export_(\d+)/, async (msg, match) => {
             XLSX.utils.book_append_sheet(wb, wsItems, 'Items');
         }
 
-        // Generate filename
-        const filename = `Invoice_${invoice.invoice_number || invoice.id}_${new Date().toISOString().split('T')[0]}.xlsx`;
+        // Generate filename (sanitize invoice number for filesystem)
+        const sanitizedInvoiceNumber = (invoice.invoice_number || invoice.id).toString().replace(/[/\\?%*:|"<>]/g, '-');
+        const filename = `Invoice_${sanitizedInvoiceNumber}_${new Date().toISOString().split('T')[0]}.xlsx`;
         const filepath = path.join(__dirname, 'temp', filename);
 
         // Write file
@@ -484,16 +485,118 @@ bot.on('photo', async (msg) => {
         resultMessage += `💾 Data tersimpan dengan ID: \`${dbResult.id}\`\n`;
         resultMessage += `Gunakan /detail\\_${dbResult.id} untuk melihat detail lengkap\\.`;
 
-        // Update processing message with result
+        // Update processing message with result and inline keyboard
         await bot.editMessageText(resultMessage, {
             chat_id: chatId,
             message_id: processingMsg.message_id,
-            parse_mode: 'Markdown'
+            parse_mode: 'Markdown',
+            reply_markup: {
+                inline_keyboard: [
+                    [
+                        {
+                            text: '📊 Export to Excel',
+                            callback_data: `export_${dbResult.id}`
+                        }
+                    ]
+                ]
+            }
         });
 
     } catch (error) {
         console.error('Error processing photo:', error);
         bot.sendMessage(chatId, `❌ Terjadi error: ${error.message}`);
+    }
+});
+
+// Handle callback queries (inline keyboard buttons)
+bot.on('callback_query', async (query) => {
+    const chatId = query.message.chat.id;
+    const data = query.data;
+
+    // Handle export button
+    if (data.startsWith('export_')) {
+        const invoiceId = parseInt(data.split('_')[1]);
+
+        try {
+            // Answer callback query to remove loading state
+            await bot.answerCallbackQuery(query.id, { text: '📊 Generating Excel...' });
+
+            const invoice = await getInvoiceById(invoiceId);
+
+            if (!invoice) {
+                await bot.answerCallbackQuery(query.id, { text: '❌ Invoice tidak ditemukan', show_alert: true });
+                return;
+            }
+
+            // Create workbook with two sheets
+            const wb = XLSX.utils.book_new();
+
+            // Sheet 1: Invoice Summary
+            const summaryData = [{
+                'Field': 'ID',
+                'Value': invoice.id
+            }, {
+                'Field': 'Invoice Number',
+                'Value': invoice.invoice_number || 'N/A'
+            }, {
+                'Field': 'Date',
+                'Value': invoice.invoice_date || 'N/A'
+            }, {
+                'Field': 'Vendor',
+                'Value': invoice.vendor_name || 'N/A'
+            }, {
+                'Field': 'Total Amount',
+                'Value': invoice.total_amount || 0
+            }, {
+                'Field': 'Currency',
+                'Value': invoice.currency || ''
+            }];
+
+            const wsSummary = XLSX.utils.json_to_sheet(summaryData);
+            wsSummary['!cols'] = [{ wch: 20 }, { wch: 30 }];
+            XLSX.utils.book_append_sheet(wb, wsSummary, 'Summary');
+
+            // Sheet 2: Line Items
+            if (invoice.items && invoice.items.length > 0) {
+                const itemsData = invoice.items.map((item, i) => ({
+                    'No': i + 1,
+                    'Description': item.description || '',
+                    'Quantity': item.quantity || 0,
+                    'Unit Price': item.unit_price || 0,
+                    'Amount': item.amount || 0
+                }));
+
+                const wsItems = XLSX.utils.json_to_sheet(itemsData);
+                wsItems['!cols'] = [
+                    { wch: 5 },
+                    { wch: 30 },
+                    { wch: 10 },
+                    { wch: 15 },
+                    { wch: 15 }
+                ];
+                XLSX.utils.book_append_sheet(wb, wsItems, 'Items');
+            }
+
+            // Generate filename (sanitize invoice number)
+            const sanitizedInvoiceNumber = (invoice.invoice_number || invoice.id).toString().replace(/[/\\?%*:|"<>]/g, '-');
+            const filename = `Invoice_${sanitizedInvoiceNumber}_${new Date().toISOString().split('T')[0]}.xlsx`;
+            const filepath = path.join(__dirname, 'temp', filename);
+
+            // Write file
+            XLSX.writeFile(wb, filepath);
+
+            // Send file
+            await bot.sendDocument(chatId, filepath, {
+                caption: `✅ Export invoice #${invoice.id}\n📄 ${invoice.invoice_number || 'N/A'}\n💰 ${invoice.currency || ''} ${(invoice.total_amount || 0).toLocaleString('id-ID')}`
+            });
+
+            // Clean up file
+            fs.unlinkSync(filepath);
+
+        } catch (error) {
+            console.error('Error in callback export:', error);
+            await bot.answerCallbackQuery(query.id, { text: '❌ Gagal export', show_alert: true });
+        }
     }
 });
 
