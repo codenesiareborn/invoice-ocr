@@ -816,7 +816,7 @@ bot.on('callback_query', async (query) => {
 });
 
 // Handle text messages (menu shortcuts)
-bot.on('text', (msg) => {
+bot.on('text', async (msg) => {
     const chatId = msg.chat.id;
     const text = msg.text;
 
@@ -824,30 +824,165 @@ bot.on('text', (msg) => {
     if (text.startsWith('/')) return;
 
     // Handle menu shortcuts
-    switch (text) {
-        case '📊 Statistics':
-            // Trigger /stats command
-            bot.emit('message', { ...msg, text: '/stats' });
-            break;
+    try {
+        switch (text) {
+            case '📊 Statistics':
+                // Execute /stats logic
+                const invoices = await getAllInvoices();
+                const totalInvoices = invoices.length;
+                const totalAmount = invoices.reduce((sum, inv) => sum + (inv.total_amount || 0), 0);
+                const vendors = [...new Set(invoices.map(inv => inv.vendor_name).filter(Boolean))];
 
-        case '📋 History':
-            // Trigger /history command
-            bot.emit('message', { ...msg, text: '/history' });
-            break;
+                let statsMessage = '📊 *Statistik Invoice*\n\n';
+                statsMessage += `📝 Total Invoice: *${totalInvoices}*\n`;
+                statsMessage += `💰 Total Amount: *IDR ${totalAmount.toLocaleString('id-ID')}*\n`;
+                statsMessage += `🏪 Jumlah Vendor: *${vendors.length}*\n`;
 
-        case '📥 Export All':
-            // Trigger /export_all command
-            bot.emit('message', { ...msg, text: '/export_all' });
-            break;
+                bot.sendMessage(chatId, statsMessage, { parse_mode: 'Markdown', reply_markup: mainMenuKeyboard });
+                break;
 
-        case '❓ Help':
-            // Trigger /start command
-            bot.emit('message', { ...msg, text: '/start' });
-            break;
+            case '📋 History':
+                // Execute /history logic
+                const allInvoices = await getAllInvoices();
 
-        default:
-            // Ignore other text messages
-            break;
+                if (allInvoices.length === 0) {
+                    bot.sendMessage(chatId, '📭 Belum ada invoice yang diproses.', { reply_markup: mainMenuKeyboard });
+                    return;
+                }
+
+                let historyMessage = '📋 *10 Invoice Terakhir:*\n\n';
+
+                allInvoices.slice(0, 10).forEach((inv, i) => {
+                    historyMessage += `${i + 1}. *${inv.vendor_name || 'N/A'}*\n`;
+                    historyMessage += `   No: ${inv.invoice_number || 'N/A'}\n`;
+                    historyMessage += `   Tanggal: ${inv.invoice_date || 'N/A'}\n`;
+                    historyMessage += `   Total: ${inv.currency || ''} ${inv.total_amount?.toLocaleString('id-ID') || 0}\n`;
+                    historyMessage += `   ID: \`${inv.id}\` (gunakan /detail_${inv.id})\n\n`;
+                });
+
+                bot.sendMessage(chatId, historyMessage, { parse_mode: 'Markdown', reply_markup: mainMenuKeyboard });
+                break;
+
+            case '📥 Export All':
+                // Execute /export_all logic
+                const statusMsg = await bot.sendMessage(chatId, '📊 Generating Excel file...', { reply_markup: mainMenuKeyboard });
+
+                const exportInvoices = await getAllInvoices();
+
+                if (exportInvoices.length === 0) {
+                    await bot.editMessageText('📭 Belum ada invoice untuk di-export.', {
+                        chat_id: chatId,
+                        message_id: statusMsg.message_id
+                    });
+                    return;
+                }
+
+                // Prepare data for Excel
+                const excelData = [];
+                exportInvoices.forEach(inv => {
+                    excelData.push({
+                        'ID': inv.id,
+                        'Invoice Number': inv.invoice_number || 'N/A',
+                        'Date': inv.invoice_date || 'N/A',
+                        'Vendor': inv.vendor_name || 'N/A',
+                        'Total Amount': inv.total_amount || 0,
+                        'Currency': inv.currency || '',
+                        'Items Count': inv.items ? inv.items.length : 0,
+                        'Created At': inv.created_at
+                    });
+                });
+
+                // Create workbook
+                const wb = XLSX.utils.book_new();
+                const ws = XLSX.utils.json_to_sheet(excelData);
+
+                // Auto-size columns
+                const colWidths = [
+                    { wch: 5 },  // ID
+                    { wch: 20 }, // Invoice Number
+                    { wch: 12 }, // Date
+                    { wch: 25 }, // Vendor
+                    { wch: 15 }, // Total Amount
+                    { wch: 8 },  // Currency
+                    { wch: 12 }, // Items Count
+                    { wch: 20 }  // Created At
+                ];
+                ws['!cols'] = colWidths;
+
+                XLSX.utils.book_append_sheet(wb, ws, 'Invoices');
+
+                // Generate filename
+                const filename = `Invoice_Export_${new Date().toISOString().split('T')[0]}.xlsx`;
+                const filepath = path.join(__dirname, 'temp', filename);
+
+                // Write file
+                XLSX.writeFile(wb, filepath);
+
+                // Send file
+                await bot.sendDocument(chatId, filepath, {
+                    caption: `✅ Export berhasil!\n📝 Total: ${exportInvoices.length} invoices\n💰 Total Amount: IDR ${exportInvoices.reduce((sum, inv) => sum + (inv.total_amount || 0), 0).toLocaleString('id-ID')}`
+                }, {
+                    contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                });
+
+                // Delete status message
+                await bot.deleteMessage(chatId, statusMsg.message_id);
+
+                // Clean up file
+                fs.unlinkSync(filepath);
+                break;
+
+            case '❓ Help':
+                // Execute /start logic
+                const welcomeMessage = `
+👋 *Selamat datang di Invoice OCR Bot!*
+
+📸 *Cara Menggunakan:*
+• Kirim foto invoice, atau
+• 🎤 Kirim voice message dengan data invoice
+
+✨ *Fitur:*
+• Extract nomor invoice
+• Extract tanggal
+• Extract nama vendor
+• Extract total amount
+• Extract detail item
+• Export ke Excel
+
+📋 *Command:*
+/start - Tampilkan pesan ini
+/history - Lihat 10 invoice terakhir
+/stats - Statistik invoice
+/export\\_all - Export semua invoice ke Excel
+/export\\_month - Export invoice bulan ini
+/export\\_[id] - Export invoice tertentu
+
+🎯 *Format yang didukung:*
+📷 Foto: JPG, PNG, WebP
+🎤 Voice: Bahasa Indonesia / English
+
+*Contoh voice:*
+_"Invoice dari Toko ABC, nomor 123, tanggal 20 Desember 2024, total 50 ribu rupiah, item sabun 10 ribu, shampo 40 ribu"_
+
+💡 *Gunakan menu di bawah untuk akses cepat!*
+
+━━━━━━━━━━━━━━━━━━━━━
+© 2024 Almafazi, Codenesia
+  `;
+
+                bot.sendMessage(chatId, welcomeMessage, {
+                    parse_mode: 'Markdown',
+                    reply_markup: mainMenuKeyboard
+                });
+                break;
+
+            default:
+                // Ignore other text messages
+                break;
+        }
+    } catch (error) {
+        console.error('Error handling menu shortcut:', error);
+        bot.sendMessage(chatId, '❌ Terjadi error saat memproses menu.', { reply_markup: mainMenuKeyboard });
     }
 });
 
