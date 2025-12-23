@@ -1,6 +1,108 @@
 const { replicate } = require('../config/replicate');
 
 /**
+ * Validate if an image contains invoice-like content
+ * @param {string} imageUrl - Public URL of the image
+ * @returns {Promise<Object>} Validation result
+ */
+async function validateImageContainsInvoice(imageUrl) {
+    try {
+        const prompt = `Analyze this image and determine if it contains an invoice, receipt, or bill.
+
+Respond with ONLY a JSON object in this exact format:
+{
+  "is_invoice": true or false,
+  "confidence": number between 0 and 1,
+  "reason": "brief explanation"
+}
+
+An image is considered an invoice if it contains:
+- Business/vendor information
+- Itemized list of products/services
+- Monetary amounts or prices
+- Invoice/receipt number or date
+
+Return ONLY the JSON object, no markdown formatting.`;
+
+        const output = await replicate.run("google/gemini-2.5-flash", {
+            input: {
+                prompt: prompt,
+                images: [imageUrl],
+                videos: [],
+                temperature: 0.1,
+                top_p: 0.95,
+                max_output_tokens: 512,
+                dynamic_thinking: false
+            },
+            wait: { interval: 500 }
+        });
+
+        const text = Array.isArray(output) ? output.join('') : output.toString();
+        let cleanedText = text.trim().replace(/```json\s*/g, '').replace(/```\s*/g, '');
+        
+        const jsonStart = cleanedText.indexOf('{');
+        const jsonEnd = cleanedText.lastIndexOf('}');
+        
+        if (jsonStart === -1 || jsonEnd === -1) {
+            return { is_invoice: false, confidence: 0, reason: 'Unable to analyze image' };
+        }
+        
+        cleanedText = cleanedText.substring(jsonStart, jsonEnd + 1);
+        const result = JSON.parse(cleanedText);
+        
+        return result;
+    } catch (error) {
+        console.error('Error validating image:', error);
+        return { is_invoice: false, confidence: 0, reason: 'Validation error' };
+    }
+}
+
+/**
+ * Validate if extracted invoice data meets minimum requirements
+ * @param {Object} data - Extracted invoice data
+ * @returns {Object} Validation result
+ */
+function validateInvoiceData(data) {
+    if (!data) {
+        return { valid: false, reason: 'No data extracted' };
+    }
+
+    let validFields = 0;
+    const reasons = [];
+
+    // Check invoice_number
+    if (data.invoice_number && data.invoice_number !== 'N/A' && data.invoice_number.trim() !== '') {
+        validFields++;
+    } else {
+        reasons.push('missing invoice number');
+    }
+
+    // Check vendor_name
+    if (data.vendor_name && data.vendor_name !== 'N/A' && data.vendor_name.trim() !== '') {
+        validFields++;
+    } else {
+        reasons.push('missing vendor name');
+    }
+
+    // Check total_amount
+    if (data.total_amount && data.total_amount > 0) {
+        validFields++;
+    } else {
+        reasons.push('missing or invalid total amount');
+    }
+
+    // Need at least 2 out of 3 key fields
+    if (validFields >= 2) {
+        return { valid: true };
+    }
+
+    return {
+        valid: false,
+        reason: `Insufficient invoice data (${reasons.join(', ')})`
+    };
+}
+
+/**
  * Extract invoice data from image using Replicate Gemini 2.5 Flash API
  * @param {string} filename - Uploaded filename
  * @returns {Promise<Object>} Extracted invoice data
@@ -10,6 +112,24 @@ async function extractInvoiceData(filename) {
         // Construct public URL for the image
         const baseUrl = process.env.BASE_URL || 'http://localhost:3000';
         const imageUrl = `${baseUrl}/uploads/${filename}`;
+
+        // Step 1: Validate if image contains invoice
+        console.log('Validating if image contains invoice...');
+        const validation = await validateImageContainsInvoice(imageUrl);
+        
+        console.log('Validation result:', validation);
+        
+        if (!validation.is_invoice || validation.confidence < 0.5) {
+            return {
+                success: false,
+                error: 'NOT_INVOICE',
+                message: 'Image does not appear to contain an invoice',
+                details: validation.reason
+            };
+        }
+
+        // Step 2: Extract invoice data
+        console.log('Image validated as invoice, proceeding with extraction...');
 
         // Craft the prompt for invoice extraction
         const prompt = `Extract invoice data from this image and return ONLY a valid JSON object with these exact fields:
@@ -91,6 +211,19 @@ IMPORTANT:
 
         // Parse JSON
         const invoiceData = JSON.parse(cleanedText);
+
+        // Step 3: Validate extracted data
+        const dataValidation = validateInvoiceData(invoiceData);
+        
+        if (!dataValidation.valid) {
+            return {
+                success: false,
+                error: 'INSUFFICIENT_DATA',
+                message: 'Extracted data does not meet minimum requirements',
+                details: dataValidation.reason,
+                data: invoiceData
+            };
+        }
 
         return {
             success: true,
@@ -185,6 +318,19 @@ IMPORTANT PARSING RULES:
 
         // Parse JSON
         const invoiceData = JSON.parse(cleanedText);
+
+        // Validate extracted data
+        const dataValidation = validateInvoiceData(invoiceData);
+        
+        if (!dataValidation.valid) {
+            return {
+                success: false,
+                error: 'INSUFFICIENT_DATA',
+                message: 'Extracted data does not meet minimum requirements',
+                details: dataValidation.reason,
+                data: invoiceData
+            };
+        }
 
         return {
             success: true,

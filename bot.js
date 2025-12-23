@@ -501,9 +501,25 @@ bot.on('voice', async (msg) => {
 
         if (!extractionResult.success) {
             await bot.editMessageText(
-                `❌ Gagal extract data invoice dari voice.\n\n📝 Transcription:\n"${transcription}"\n\nCoba lagi dengan menyebutkan data lebih jelas.`,
-                { chat_id: chatId, message_id: processingMsg.message_id }
+                `❌ *Gagal extract data invoice dari voice*\n\n📝 Transcription:\n"${transcription}"\n\n`,
+                { chat_id: chatId, message_id: processingMsg.message_id, parse_mode: 'Markdown' }
             );
+
+            // Send additional help based on error type
+            let helpMessage = '';
+
+            if (extractionResult.error === 'INSUFFICIENT_DATA') {
+                helpMessage = '💡 *Tips:* Sebutkan dengan jelas:\n';
+                helpMessage += '• Nomor invoice\n';
+                helpMessage += '• Nama vendor/toko\n';
+                helpMessage += '• Total amount dengan mata uang\n';
+                helpMessage += '• (Opsional) Daftar item dan harga\n\n';
+                helpMessage += `ℹ️ ${extractionResult.details || 'Data tidak mencukupi'}`;
+            } else {
+                helpMessage = '💡 *Contoh:* "Invoice dari Toko ABC, nomor 123, tanggal 20 Desember 2024, total 50 ribu rupiah"';
+            }
+
+            await bot.sendMessage(chatId, helpMessage, { parse_mode: 'Markdown' });
             return;
         }
 
@@ -604,10 +620,33 @@ bot.on('photo', async (msg) => {
                 fs.unlinkSync(uploadPath);
             }
 
-            await bot.editMessageText(
-                '❌ Gagal memproses invoice. Silakan coba lagi dengan foto yang lebih jelas.',
-                { chat_id: chatId, message_id: processingMsg.message_id }
-            );
+            // Handle different error types
+            let errorMessage = '❌ Gagal memproses invoice.';
+
+            if (extractionResult.error === 'NOT_INVOICE') {
+                errorMessage = '❌ *Gambar tidak terdeteksi sebagai invoice*\n\n';
+                errorMessage += '📸 Pastikan foto menampilkan invoice/nota dengan jelas yang berisi:\n';
+                errorMessage += '• Informasi vendor/toko\n';
+                errorMessage += '• Nomor invoice atau tanggal\n';
+                errorMessage += '• Daftar item dan harga\n';
+                errorMessage += '• Total amount\n\n';
+                errorMessage += `ℹ️ ${extractionResult.details || 'Gambar tidak mengandung informasi invoice'}`;
+            } else if (extractionResult.error === 'INSUFFICIENT_DATA') {
+                errorMessage = '❌ *Data invoice tidak lengkap*\n\n';
+                errorMessage += '📋 Invoice harus memiliki minimal 2 dari:\n';
+                errorMessage += '• Nomor invoice\n';
+                errorMessage += '• Nama vendor\n';
+                errorMessage += '• Total amount\n\n';
+                errorMessage += `ℹ️ ${extractionResult.details || 'Data tidak mencukupi'}`;
+            } else {
+                errorMessage += '\n\nSilakan coba lagi dengan foto yang lebih jelas.';
+            }
+
+            await bot.editMessageText(errorMessage, {
+                chat_id: chatId,
+                message_id: processingMsg.message_id,
+                parse_mode: 'Markdown'
+            });
             return;
         }
 
