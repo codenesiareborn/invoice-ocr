@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Invoice OCR - Gemini AI</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <h1>📄 Invoice OCR</h1>
+            <p>Extract invoice data using Gemini AI</p>
+        </header>
+
+        <!-- Upload Section -->
+        <div class="upload-section">
+            <div class="upload-card">
+                <h2>Upload Invoice</h2>
+                
+                <!-- File Upload -->
+                <div class="upload-zone" id="uploadZone">
+                    <svg class="upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+                    </svg>
+                    <p class="upload-text">Drag & drop invoice image here</p>
+                    <p class="upload-subtext">or</p>
+                    <label for="fileInput" class="upload-btn">Browse Files</label>
+                    <input type="file" id="fileInput" accept="image/jpeg,image/jpg,image/png,image/webp" hidden>
+                    <p class="upload-info">Supported: JPG, PNG, WebP (Max 10MB)</p>
+                </div>
+
+                <!-- Camera Capture -->
+                <div class="divider">
+                    <span>OR</span>
+                </div>
+
+                <button class="camera-btn" id="cameraBtn">
+                    <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"/>
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"/>
+                    </svg>
+                    Take Photo
+                </button>
+
+                <!-- Camera Preview (Hidden by default) -->
+                <div class="camera-preview" id="cameraPreview" style="display: none;">
+                    <video id="cameraVideo" autoplay playsinline></video>
+                    <div class="camera-controls">
+                        <button class="capture-btn" id="captureBtn">Capture</button>
+                        <button class="close-btn" id="closeCameraBtn">Close</button>
+                    </div>
+                    <canvas id="canvas" style="display: none;"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <!-- Loading Indicator -->
+        <div class="loading" id="loading" style="display: none;">
+            <div class="spinner"></div>
+            <p>Processing invoice with Gemini AI...</p>
+        </div>
+
+        <!-- Results Section -->
+        <div class="results-section" id="resultsSection" style="display: none;">
+            <div class="result-card">
+                <h2>Extraction Results</h2>
+                <div class="result-grid" id="resultGrid"></div>
+                
+                <div class="items-section" id="itemsSection" style="display: none;">
+                    <h3>Line Items</h3>
+                    <div class="items-table-wrapper">
+                        <table class="items-table" id="itemsTable"></table>
+                    </div>
+                </div>
+
+                <button class="new-scan-btn" id="newScanBtn">
+                    <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                    </svg>
+                    Process Another Invoice
+                </button>
+            </div>
+        </div>
+
+        <!-- Error Message -->
+        <div class="error-message" id="errorMessage" style="display: none;"></div>
+
+        <!-- Recent Invoices -->
+        <div class="recent-section">
+            <h2>Recent Invoices</h2>
+            <div class="recent-list" id="recentList">
+                <p class="empty-state">No invoices processed yet</p>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/app.js"></script>
+</body>
+</html>
