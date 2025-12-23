@@ -33,6 +33,16 @@ function escapeMarkdown(text) {
 }
 
 
+// Reply keyboard markup for quick access
+const mainMenuKeyboard = {
+    keyboard: [
+        [{ text: '📊 Statistics' }, { text: '📋 History' }],
+        [{ text: '📥 Export All' }, { text: '❓ Help' }]
+    ],
+    resize_keyboard: true,
+    persistent: true
+};
+
 // Command: /start
 bot.onText(/\/start/, (msg) => {
     const chatId = msg.chat.id;
@@ -66,11 +76,16 @@ bot.onText(/\/start/, (msg) => {
 *Contoh voice:*
 _"Invoice dari Toko ABC, nomor 123, tanggal 20 Desember 2024, total 50 ribu rupiah, item sabun 10 ribu, shampo 40 ribu"_
 
+💡 *Gunakan menu di bawah untuk akses cepat!*
+
 ━━━━━━━━━━━━━━━━━━━━━
 © 2024 Almafazi, Codenesia
   `;
 
-    bot.sendMessage(chatId, welcomeMessage, { parse_mode: 'Markdown' });
+    bot.sendMessage(chatId, welcomeMessage, {
+        parse_mode: 'Markdown',
+        reply_markup: mainMenuKeyboard
+    });
 });
 
 // Command: /history
@@ -800,13 +815,49 @@ bot.on('callback_query', async (query) => {
     }
 });
 
+// Handle text messages (menu shortcuts)
+bot.on('text', (msg) => {
+    const chatId = msg.chat.id;
+    const text = msg.text;
+
+    // Ignore if it's a command (starts with /)
+    if (text.startsWith('/')) return;
+
+    // Handle menu shortcuts
+    switch (text) {
+        case '📊 Statistics':
+            // Trigger /stats command
+            bot.emit('message', { ...msg, text: '/stats' });
+            break;
+
+        case '📋 History':
+            // Trigger /history command
+            bot.emit('message', { ...msg, text: '/history' });
+            break;
+
+        case '📥 Export All':
+            // Trigger /export_all command
+            bot.emit('message', { ...msg, text: '/export_all' });
+            break;
+
+        case '❓ Help':
+            // Trigger /start command
+            bot.emit('message', { ...msg, text: '/start' });
+            break;
+
+        default:
+            // Ignore other text messages
+            break;
+    }
+});
+
 // Handle document (reject)
 bot.on('document', (msg) => {
     const chatId = msg.chat.id;
     bot.sendMessage(
         chatId,
         '📎 Mohon kirim sebagai *foto*, bukan sebagai file/document.\n\nTekan icon 📷 untuk mengirim foto.',
-        { parse_mode: 'Markdown' }
+        { parse_mode: 'Markdown', reply_markup: mainMenuKeyboard }
     );
 });
 
