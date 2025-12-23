@@ -225,6 +225,8 @@ bot.onText(/\/export_all/, async (msg) => {
         // Send file
         await bot.sendDocument(chatId, filepath, {
             caption: `✅ Export berhasil!\n📝 Total: ${invoices.length} invoices\n💰 Total Amount: IDR ${invoices.reduce((sum, inv) => sum + (inv.total_amount || 0), 0).toLocaleString('id-ID')}`
+        }, {
+            contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         });
 
         // Delete status message
@@ -317,6 +319,8 @@ bot.onText(/\/export_(\d+)/, async (msg, match) => {
         // Send file
         await bot.sendDocument(chatId, filepath, {
             caption: `✅ Export invoice #${invoice.id}\n📄 ${invoice.invoice_number || 'N/A'}\n💰 ${invoice.currency || ''} ${(invoice.total_amount || 0).toLocaleString('id-ID')}`
+        }, {
+            contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         });
 
         // Delete status message
@@ -390,6 +394,8 @@ bot.onText(/\/export_month/, async (msg) => {
         // Send file
         await bot.sendDocument(chatId, filepath, {
             caption: `✅ Export ${monthNames[currentMonth]} ${currentYear}\n📝 Total: ${monthInvoices.length} invoices\n💰 Total Amount: IDR ${monthInvoices.reduce((sum, inv) => sum + (inv.total_amount || 0), 0).toLocaleString('id-ID')}`
+        }, {
+            contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         });
 
         // Delete status message
@@ -741,6 +747,8 @@ bot.on('callback_query', async (query) => {
             // Send file
             await bot.sendDocument(chatId, filepath, {
                 caption: `✅ Export invoice #${invoice.id}\n📄 ${invoice.invoice_number || 'N/A'}\n💰 ${invoice.currency || ''} ${(invoice.total_amount || 0).toLocaleString('id-ID')}`
+            }, {
+                contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
             });
 
             // Clean up file
