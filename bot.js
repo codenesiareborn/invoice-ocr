@@ -24,6 +24,13 @@ const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 console.log('🤖 Invoice OCR Telegram Bot started...');
 console.log('📊 Using Replicate API: google/gemini-2.5-flash');
 
+// Helper function to escape Markdown special characters
+function escapeMarkdown(text) {
+    if (!text) return text;
+    return text.toString().replace(/[_*[\]()~`>#+=|{}.!-]/g, '\\$&');
+}
+
+
 // Command: /start
 bot.onText(/\/start/, (msg) => {
     const chatId = msg.chat.id;
@@ -212,22 +219,22 @@ bot.on('photo', async (msg) => {
         const data = extractionResult.data;
         let resultMessage = '✅ *Invoice berhasil diproses!*\n\n';
         resultMessage += `🆔 *ID:* ${dbResult.id}\n`;
-        resultMessage += `📄 *No. Invoice:* ${data.invoice_number || 'N/A'}\n`;
-        resultMessage += `📅 *Tanggal:* ${data.invoice_date || 'N/A'}\n`;
-        resultMessage += `🏪 *Vendor:* ${data.vendor_name || 'N/A'}\n`;
-        resultMessage += `💰 *Total:* ${data.currency || ''} ${data.total_amount?.toLocaleString('id-ID') || 0}\n\n`;
+        resultMessage += `📄 *No\\. Invoice:* ${escapeMarkdown(data.invoice_number) || 'N/A'}\n`;
+        resultMessage += `📅 *Tanggal:* ${escapeMarkdown(data.invoice_date) || 'N/A'}\n`;
+        resultMessage += `🏪 *Vendor:* ${escapeMarkdown(data.vendor_name) || 'N/A'}\n`;
+        resultMessage += `💰 *Total:* ${escapeMarkdown(data.currency) || ''} ${data.total_amount?.toLocaleString('id-ID') || 0}\n\n`;
 
         if (data.items && data.items.length > 0) {
             resultMessage += '*📦 Item:*\n';
             data.items.forEach((item, i) => {
-                resultMessage += `${i + 1}. ${item.description}\n`;
+                resultMessage += `${i + 1}\\. ${escapeMarkdown(item.description)}\n`;
                 resultMessage += `   ${item.quantity}x @ ${item.unit_price?.toLocaleString('id-ID')} = ${item.amount?.toLocaleString('id-ID')}\n`;
             });
             resultMessage += '\n';
         }
 
         resultMessage += `💾 Data tersimpan dengan ID: \`${dbResult.id}\`\n`;
-        resultMessage += `Gunakan /detail_${dbResult.id} untuk melihat detail lengkap.`;
+        resultMessage += `Gunakan /detail\\_${dbResult.id} untuk melihat detail lengkap\\.`;
 
         // Update processing message with result
         await bot.editMessageText(resultMessage, {
