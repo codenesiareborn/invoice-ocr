@@ -39,17 +39,17 @@ Return ONLY the JSON object, no markdown formatting.`;
 
         const text = Array.isArray(output) ? output.join('') : output.toString();
         let cleanedText = text.trim().replace(/```json\s*/g, '').replace(/```\s*/g, '');
-        
+
         const jsonStart = cleanedText.indexOf('{');
         const jsonEnd = cleanedText.lastIndexOf('}');
-        
+
         if (jsonStart === -1 || jsonEnd === -1) {
             return { is_invoice: false, confidence: 0, reason: 'Unable to analyze image' };
         }
-        
+
         cleanedText = cleanedText.substring(jsonStart, jsonEnd + 1);
         const result = JSON.parse(cleanedText);
-        
+
         return result;
     } catch (error) {
         console.error('Error validating image:', error);
@@ -113,23 +113,24 @@ async function extractInvoiceData(filename) {
         const baseUrl = process.env.BASE_URL || 'http://localhost:3000';
         const imageUrl = `${baseUrl}/uploads/${filename}`;
 
-        // Step 1: Validate if image contains invoice
-        console.log('Validating if image contains invoice...');
-        const validation = await validateImageContainsInvoice(imageUrl);
-        
-        console.log('Validation result:', validation);
-        
-        if (!validation.is_invoice || validation.confidence < 0.5) {
-            return {
-                success: false,
-                error: 'NOT_INVOICE',
-                message: 'Image does not appear to contain an invoice',
-                details: validation.reason
-            };
-        }
+        // Step 1: Validate if image contains invoice (DISABLED - too strict)
+        // The validation was rejecting valid invoices, so we'll rely on data validation instead
+        // console.log('Validating if image contains invoice...');
+        // const validation = await validateImageContainsInvoice(imageUrl);
+        // 
+        // console.log('Validation result:', validation);
+        // 
+        // if (!validation.is_invoice || validation.confidence < 0.5) {
+        //     return {
+        //         success: false,
+        //         error: 'NOT_INVOICE',
+        //         message: 'Image does not appear to contain an invoice',
+        //         details: validation.reason
+        //     };
+        // }
 
         // Step 2: Extract invoice data
-        console.log('Image validated as invoice, proceeding with extraction...');
+        console.log('Proceeding with invoice extraction...');
 
         // Craft the prompt for invoice extraction
         const prompt = `Extract invoice data from this image and return ONLY a valid JSON object with these exact fields:
@@ -214,7 +215,7 @@ IMPORTANT:
 
         // Step 3: Validate extracted data
         const dataValidation = validateInvoiceData(invoiceData);
-        
+
         if (!dataValidation.valid) {
             return {
                 success: false,
@@ -321,7 +322,7 @@ IMPORTANT PARSING RULES:
 
         // Validate extracted data
         const dataValidation = validateInvoiceData(invoiceData);
-        
+
         if (!dataValidation.valid) {
             return {
                 success: false,
