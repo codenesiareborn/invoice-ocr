@@ -7,7 +7,15 @@ require('dotenv').config();
 
 // Import services
 const { extractInvoiceData, extractInvoiceDataFromText } = require('./services/replicateService');
-const { saveInvoice, getAllInvoices, getInvoiceById } = require('./services/databaseService');
+const {
+    saveInvoice,
+    getAllInvoices,
+    getInvoiceById,
+    getInvoiceStatistics,
+    getInvoicesByVendor,
+    getInvoicesByMonth,
+    getInvoicesByAmountRange
+} = require('./services/databaseService');
 const { transcribeAudio } = require('./services/whisperService');
 
 // Initialize database
@@ -41,6 +49,23 @@ const mainMenuKeyboard = {
     ],
     resize_keyboard: true,
     persistent: true
+};
+
+// Statistics view keyboard
+const statsKeyboard = {
+    inline_keyboard: [
+        [
+            { text: '📈 Monthly Trend', callback_data: 'stats_monthly' },
+            { text: '🏢 Top Vendors', callback_data: 'stats_vendors' }
+        ],
+        [
+            { text: '💰 Amount Range', callback_data: 'stats_amount' },
+            { text: '📊 Overview', callback_data: 'stats_overview' }
+        ],
+        [
+            { text: '⬅️ Back to Menu', callback_data: 'stats_back' }
+        ]
+    ]
 };
 
 // Command: /start
@@ -159,22 +184,37 @@ bot.onText(/\/stats/, async (msg) => {
     const chatId = msg.chat.id;
 
     try {
-        const invoices = await getAllInvoices();
+        const [stats, byVendor, byMonth, byAmountRange] = await Promise.all([
+            getInvoiceStatistics(),
+            getInvoicesByVendor(),
+            getInvoicesByMonth(),
+            getInvoicesByAmountRange()
+        ]);
 
-        const totalInvoices = invoices.length;
-        const totalAmount = invoices.reduce((sum, inv) => sum + (inv.total_amount || 0), 0);
-        const vendors = [...new Set(invoices.map(inv => inv.vendor_name).filter(Boolean))];
+        if (!stats || stats.total_invoices === 0) {
+            bot.sendMessage(chatId, '📭 Belum ada invoice yang diproses.', { reply_markup: mainMenuKeyboard });
+            return;
+        }
 
-        let message = '📊 *Statistik Invoice*\n\n';
-        message += `📝 Total Invoice: *${totalInvoices}*\n`;
-        message += `💰 Total Amount: *IDR ${totalAmount.toLocaleString('id-ID')}*\n`;
-        message += `🏪 Jumlah Vendor: *${vendors.length}*\n`;
+        let message = '📊 *Statistik Invoice - Overview*\n\n';
+        message += `📝 *Total Invoice:* ${stats.total_invoices}\n`;
+        message += `💰 *Total Amount:* IDR ${stats.total_amount?.toLocaleString('id-ID') || 0}\n`;
+        message += `📊 *Average Amount:* IDR ${stats.average_amount?.toLocaleString('id-ID') || 0}\n`;
+        message += `📉 *Min Amount:* IDR ${stats.min_amount?.toLocaleString('id-ID') || 0}\n`;
+        message += `📈 *Max Amount:* IDR ${stats.max_amount?.toLocaleString('id-ID') || 0}\n`;
+        message += `🏪 *Unique Vendors:* ${stats.unique_vendors}\n\n`;
+        message += `📅 *Top Month:* ${byMonth.length > 0 ? formatMonthShort(byMonth[byMonth.length - 1].month) : 'N/A'} (${byMonth.length > 0 ? byMonth[byMonth.length - 1].count : 0} invoices)\n`;
+        message += `🏆 *Top Vendor:* ${byVendor.length > 0 ? byVendor[0].vendor_name : 'N/A'} (IDR ${byVendor.length > 0 ? byVendor[0].total_amount?.toLocaleString('id-ID') : 0})\n\n`;
+        message += `💡 Pilih tombol di bawah untuk detail lebih lanjut:`;
 
-        bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+        bot.sendMessage(chatId, message, {
+            parse_mode: 'Markdown',
+            reply_markup: statsKeyboard
+        });
 
     } catch (error) {
         console.error('Error fetching stats:', error);
-        bot.sendMessage(chatId, '❌ Gagal mengambil statistik.');
+        bot.sendMessage(chatId, '❌ Gagal mengambil statistik.', { reply_markup: mainMenuKeyboard });
     }
 });
 
@@ -726,6 +766,39 @@ bot.on('callback_query', async (query) => {
     const chatId = query.message.chat.id;
     const data = query.data;
 
+    // Handle statistics views
+    if (data.startsWith('stats_')) {
+        const action = data.split('_')[1];
+        
+        try {
+            await bot.answerCallbackQuery(query.id);
+
+            switch (action) {
+                case 'overview':
+                    await showStatsOverview(chatId);
+                    break;
+                case 'monthly':
+                    await showStatsMonthly(chatId);
+                    break;
+                case 'vendors':
+                    await showStatsVendors(chatId);
+                    break;
+                case 'amount':
+                    await showStatsAmountRange(chatId);
+                    break;
+                case 'back':
+                    bot.sendMessage(chatId, '📋 Kembali ke menu utama. Gunakan tombol di bawah.', {
+                        reply_markup: mainMenuKeyboard
+                    });
+                    break;
+            }
+        } catch (error) {
+            console.error('Error handling stats callback:', error);
+            await bot.answerCallbackQuery(query.id, { text: '❌ Error', show_alert: true });
+        }
+        return;
+    }
+
     // Handle export button
     if (data.startsWith('export_')) {
         const invoiceId = parseInt(data.split('_')[1]);
@@ -828,17 +901,33 @@ bot.on('text', async (msg) => {
         switch (text) {
             case '📊 Statistics':
                 // Execute /stats logic
-                const invoices = await getAllInvoices();
-                const totalInvoices = invoices.length;
-                const totalAmount = invoices.reduce((sum, inv) => sum + (inv.total_amount || 0), 0);
-                const vendors = [...new Set(invoices.map(inv => inv.vendor_name).filter(Boolean))];
+                const [stats, byVendor, byMonth, byAmountRange] = await Promise.all([
+                    getInvoiceStatistics(),
+                    getInvoicesByVendor(),
+                    getInvoicesByMonth(),
+                    getInvoicesByAmountRange()
+                ]);
 
-                let statsMessage = '📊 *Statistik Invoice*\n\n';
-                statsMessage += `📝 Total Invoice: *${totalInvoices}*\n`;
-                statsMessage += `💰 Total Amount: *IDR ${totalAmount.toLocaleString('id-ID')}*\n`;
-                statsMessage += `🏪 Jumlah Vendor: *${vendors.length}*\n`;
+                if (!stats || stats.total_invoices === 0) {
+                    bot.sendMessage(chatId, '📭 Belum ada invoice yang diproses.', { reply_markup: mainMenuKeyboard });
+                    return;
+                }
 
-                bot.sendMessage(chatId, statsMessage, { parse_mode: 'Markdown', reply_markup: mainMenuKeyboard });
+                let statsMessage = '📊 *Statistik Invoice - Overview*\n\n';
+                statsMessage += `📝 *Total Invoice:* ${stats.total_invoices}\n`;
+                statsMessage += `💰 *Total Amount:* IDR ${stats.total_amount?.toLocaleString('id-ID') || 0}\n`;
+                statsMessage += `📊 *Average Amount:* IDR ${stats.average_amount?.toLocaleString('id-ID') || 0}\n`;
+                statsMessage += `📉 *Min Amount:* IDR ${stats.min_amount?.toLocaleString('id-ID') || 0}\n`;
+                statsMessage += `📈 *Max Amount:* IDR ${stats.max_amount?.toLocaleString('id-ID') || 0}\n`;
+                statsMessage += `🏪 *Unique Vendors:* ${stats.unique_vendors}\n\n`;
+                statsMessage += `📅 *Top Month:* ${byMonth.length > 0 ? formatMonthShort(byMonth[byMonth.length - 1].month) : 'N/A'} (${byMonth.length > 0 ? byMonth[byMonth.length - 1].count : 0} invoices)\n`;
+                statsMessage += `🏆 *Top Vendor:* ${byVendor.length > 0 ? byVendor[0].vendor_name : 'N/A'} (IDR ${byVendor.length > 0 ? byVendor[0].total_amount?.toLocaleString('id-ID') : 0})\n\n`;
+                statsMessage += `💡 Pilih tombol di bawah untuk detail lebih lanjut:`;
+
+                bot.sendMessage(chatId, statsMessage, {
+                    parse_mode: 'Markdown',
+                    reply_markup: statsKeyboard
+                });
                 break;
 
             case '📋 History':
@@ -1000,6 +1089,133 @@ bot.on('document', (msg) => {
 bot.on('polling_error', (error) => {
     console.error('Polling error:', error);
 });
+
+// Helper function to format month
+function formatMonthShort(monthString) {
+    if (!monthString) return 'N/A';
+    const [year, month] = monthString.split('-');
+    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return `${monthNames[parseInt(month) - 1]} ${year}`;
+}
+
+// Show statistics overview
+async function showStatsOverview(chatId) {
+    try {
+        const [stats, byVendor, byMonth] = await Promise.all([
+            getInvoiceStatistics(),
+            getInvoicesByVendor(),
+            getInvoicesByMonth()
+        ]);
+
+        let message = '📊 *Statistik Invoice - Overview*\n\n';
+        message += `📝 *Total Invoice:* ${stats.total_invoices}\n`;
+        message += `💰 *Total Amount:* IDR ${stats.total_amount?.toLocaleString('id-ID') || 0}\n`;
+        message += `📊 *Average Amount:* IDR ${stats.average_amount?.toLocaleString('id-ID') || 0}\n`;
+        message += `📉 *Min Amount:* IDR ${stats.min_amount?.toLocaleString('id-ID') || 0}\n`;
+        message += `📈 *Max Amount:* IDR ${stats.max_amount?.toLocaleString('id-ID') || 0}\n`;
+        message += `🏪 *Unique Vendors:* ${stats.unique_vendors}\n\n`;
+        message += `📅 *Top Month:* ${byMonth.length > 0 ? formatMonthShort(byMonth[byMonth.length - 1].month) : 'N/A'} (${byMonth.length > 0 ? byMonth[byMonth.length - 1].count : 0} invoices)\n`;
+        message += `🏆 *Top Vendor:* ${byVendor.length > 0 ? byVendor[0].vendor_name : 'N/A'} (IDR ${byVendor.length > 0 ? byVendor[0].total_amount?.toLocaleString('id-ID') : 0})`;
+
+        bot.sendMessage(chatId, message, {
+            parse_mode: 'Markdown',
+            reply_markup: statsKeyboard
+        });
+    } catch (error) {
+        console.error('Error showing stats overview:', error);
+        bot.sendMessage(chatId, '❌ Gagal menampilkan statistik.', { reply_markup: statsKeyboard });
+    }
+}
+
+// Show monthly statistics
+async function showStatsMonthly(chatId) {
+    try {
+        const byMonth = await getInvoicesByMonth();
+
+        if (byMonth.length === 0) {
+            bot.sendMessage(chatId, '📭 Belum ada data bulanan.', { reply_markup: statsKeyboard });
+            return;
+        }
+
+        let message = '📈 *Statistik Bulanan*\n\n';
+        
+        byMonth.forEach((m, i) => {
+            message += `${i + 1}. *${formatMonthShort(m.month)}*\n`;
+            message += `   📝 ${m.count} invoice(s)\n`;
+            message += `   💰 IDR ${m.total_amount?.toLocaleString('id-ID') || 0}\n`;
+            message += `   📊 Rata-rata: IDR ${(m.total_amount / m.count)?.toLocaleString('id-ID') || 0}\n\n`;
+        });
+
+        bot.sendMessage(chatId, message, {
+            parse_mode: 'Markdown',
+            reply_markup: statsKeyboard
+        });
+    } catch (error) {
+        console.error('Error showing monthly stats:', error);
+        bot.sendMessage(chatId, '❌ Gagal menampilkan statistik bulanan.', { reply_markup: statsKeyboard });
+    }
+}
+
+// Show vendor statistics
+async function showStatsVendors(chatId) {
+    try {
+        const byVendor = await getInvoicesByVendor();
+
+        if (byVendor.length === 0) {
+            bot.sendMessage(chatId, '📭 Belum ada data vendor.', { reply_markup: statsKeyboard });
+            return;
+        }
+
+        let message = '🏢 *Statistik Vendor (Top 10)*\n\n';
+        
+        byVendor.slice(0, 10).forEach((v, i) => {
+            const percentage = ((v.total_amount / byVendor.reduce((sum, x) => sum + x.total_amount, 0)) * 100).toFixed(1);
+            message += `${i + 1}. *${escapeMarkdown(v.vendor_name)}*\n`;
+            message += `   📝 ${v.count} invoice(s)\n`;
+            message += `   💰 IDR ${v.total_amount?.toLocaleString('id-ID') || 0} (${percentage}%)\n\n`;
+        });
+
+        bot.sendMessage(chatId, message, {
+            parse_mode: 'Markdown',
+            reply_markup: statsKeyboard
+        });
+    } catch (error) {
+        console.error('Error showing vendor stats:', error);
+        bot.sendMessage(chatId, '❌ Gagal menampilkan statistik vendor.', { reply_markup: statsKeyboard });
+    }
+}
+
+// Show amount range statistics
+async function showStatsAmountRange(chatId) {
+    try {
+        const byAmountRange = await getInvoicesByAmountRange();
+
+        if (byAmountRange.length === 0) {
+            bot.sendMessage(chatId, '📭 Belum ada data amount range.', { reply_markup: statsKeyboard });
+            return;
+        }
+
+        const total = byAmountRange.reduce((sum, r) => sum + r.count, 0);
+
+        let message = '💰 *Distribusi Amount Invoice*\n\n';
+        
+        byAmountRange.forEach((r, i) => {
+            const percentage = ((r.count / total) * 100).toFixed(1);
+            const bar = '█'.repeat(Math.round(percentage / 10));
+            message += `${i + 1}. *IDR ${r.amount_range}*\n`;
+            message += `   📝 ${r.count} invoice(s) (${percentage}%)\n`;
+            message += `   ${bar}\n\n`;
+        });
+
+        bot.sendMessage(chatId, message, {
+            parse_mode: 'Markdown',
+            reply_markup: statsKeyboard
+        });
+    } catch (error) {
+        console.error('Error showing amount range stats:', error);
+        bot.sendMessage(chatId, '❌ Gagal menampilkan distribusi amount.', { reply_markup: statsKeyboard });
+    }
+}
 
 // Graceful shutdown
 process.on('SIGINT', () => {

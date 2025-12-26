@@ -3,7 +3,15 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const { extractInvoiceData } = require('../services/replicateService');
-const { saveInvoice, getAllInvoices, getInvoiceById } = require('../services/databaseService');
+const {
+    saveInvoice,
+    getAllInvoices,
+    getInvoiceById,
+    getInvoiceStatistics,
+    getInvoicesByVendor,
+    getInvoicesByMonth,
+    getInvoicesByAmountRange
+} = require('../services/databaseService');
 
 const router = express.Router();
 
@@ -90,6 +98,38 @@ router.post('/process', upload.single('invoice'), async (req, res) => {
         res.status(500).json({
             success: false,
             error: 'Server error processing invoice',
+            details: error.message
+        });
+    }
+});
+
+/**
+ * GET /api/invoice/statistics
+ * Get invoice statistics
+ */
+router.get('/statistics', async (req, res) => {
+    try {
+        const [stats, byVendor, byMonth, byAmountRange] = await Promise.all([
+            getInvoiceStatistics(),
+            getInvoicesByVendor(),
+            getInvoicesByMonth(),
+            getInvoicesByAmountRange()
+        ]);
+
+        res.json({
+            success: true,
+            data: {
+                overview: stats,
+                byVendor,
+                byMonth,
+                byAmountRange
+            }
+        });
+    } catch (error) {
+        console.error('Error fetching statistics:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to fetch statistics',
             details: error.message
         });
     }
